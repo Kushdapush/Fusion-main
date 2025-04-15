@@ -872,3 +872,94 @@ def submit_marks(request):
         response_data["errors"] = errors
 
     return Response(response_data, status=status.HTTP_200_OK if successful_updates > 0 else status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_course_notification(request):
+    """
+    API to send course management notifications.
+    
+    POST parameters:
+    - recipient_id: User ID of the recipient
+    - type: Type of notification (e.g., 'new_slide', 'new_assignment', etc.)
+    - course_code: (Optional) Code of the course
+    - message: (Optional) Custom message for custom notifications
+    """
+    try:
+        # Extract data from request
+        recipient_id = request.data.get('recipient_id')
+        notification_type = request.data.get('type')
+        course_code = request.data.get('course_code')
+        message = request.data.get('message')
+        
+        # Validate required fields
+        if not recipient_id or not notification_type:
+            return Response(
+                {"error": "recipient_id and type are required fields"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Get the recipient user
+        try:
+            recipient = User.objects.get(id=recipient_id)
+        except User.DoesNotExist:
+            return Response(
+                {"error": f"Recipient with ID {recipient_id} not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Send notification
+        sender = request.user  # Current logged-in user is the sender
+        course_management_notif(
+            sender=sender,
+            recipient=recipient,
+            type=notification_type,
+            course_code=course_code,
+            message=message
+        )
+        
+        return Response(
+            {"message": "Notification sent successfully"}, 
+            status=status.HTTP_200_OK
+        )
+        
+    except Exception as e:
+        return Response(
+            {"error": f"Failed to send notification: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+def course_management_notif(sender, recipient, type, course_code=None, message=None):
+    """
+    Function to handle course management notifications.
+    
+    @param:
+        sender - User sending the notification
+        recipient - User receiving the notification
+        type - Type of notification (e.g., 'new_slide', 'new_assignment', etc.)
+        course_code - Code of the course (optional)
+        message - Custom message (optional)
+    """
+    url = 'online_cms:course'  # URL to redirect to when notification is clicked
+    module = 'Course Management'
+    sender = sender
+    recipient = recipient
+    verb = ''
+    
+    # Define different notification messages based on type
+    if type == 'new_slide':
+        verb = f"New slide has been uploaded for course {course_code}" if course_code else "New slide has been uploaded"
+    elif type == 'new_assignment':
+        verb = f"New assignment has been posted for course {course_code}" if course_code else "New assignment has been posted"
+    elif type == 'grade_updated':
+        verb = f"Your grades have been updated for course {course_code}" if course_code else "Your grades have been updated"
+    elif type == 'assignment_feedback':
+        verb = f"Feedback added to your assignment for course {course_code}" if course_code else "Feedback added to your assignment"
+    elif type == 'attendance_updated':
+        verb = f"Your attendance has been updated for course {course_code}" if course_code else "Your attendance has been updated"
+    elif type == 'custom':
+        # For custom notifications
+        verb = message if message else "You have a new notification"
+    
+    # Send the notification
+    notify.send(sender=sender, recipient=recipient, url=url, module=module, verb=verb)
