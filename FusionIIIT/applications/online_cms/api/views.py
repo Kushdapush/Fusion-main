@@ -33,106 +33,11 @@ from applications.online_cms.models import Attendance
 import pandas as pd
 from datetime import datetime
 
-# from applications.globals.models import *
-
-# from .forms import *
-# from .helpers import create_thumbnail, semester
-# from .models import *
-# from .helpers import create_thumbnail, semester
-# from notification.views import course_management_notif
-# def viewcourses_serialized(request):
-#     user = request.user
-#     extrainfo = ExtraInfo.objects.select_related().get(user=user)
-    
-#     # If the user is a student
-#     if extrainfo.user_type == 'student':
-#         student = Student.objects.select_related('id').get(id=extrainfo)
-#         register = course_registration.objects.select_related().filter(student_id=student)
-
-#         # Serialize registered courses
-#         registered_courses_data = serializers.serialize('json', register)
-
-#         return JsonResponse({
-#             'user_type': 'student',
-#             'registered_courses': registered_courses_data,
-#         })
-
-#     # If the user is faculty
-#     elif extrainfo.user_type == 'faculty':
-#         instructor = CourseInstructor.objects.select_related('curriculum_id').filter(instructor_id=extrainfo)
-#         curriculum_list = [Courses.objects.select_related().get(pk=x.course_id) for x in instructor]
-
-#         # Serialize curriculum list
-#         curriculum_data = serializers.serialize('json', curriculum_list)
-
-#         return JsonResponse({
-#             'user_type': 'faculty',
-#             'curriculum_list': curriculum_data,
-#         })
-
-#     # If the user is an admin
-#     elif extrainfo.id == 'id_admin':
-#         # if request.session.get('currentDesignationSelected') != 'acadadmin':
-#         #     return HttpResponseRedirect('/dashboard/')
-        
-#         calendar = Calendar.objects.all()
-#         timetable = Timetable.objects.all()
-
-#         # Serialize calendar and timetable data
-#         calendar_data = serializers.serialize('json', calendar)
-#         timetable_data = serializers.serialize('json', timetable)
-
-#         return JsonResponse({
-#             'user_type': 'admin',
-#             'academic_calendar': calendar_data,
-#             'timetable': timetable_data,
-#         })
-
-#     return JsonResponse({
-#         'error': 'Unknown user type'
-#     })
-
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
 from rest_framework import status  # Import for custom status codes
 from .serializers import *
-# class CourseListView(APIView):
-#     def get(self, request):
-#         user = request.user
-
-#         try:
-#             extrainfo = ExtraInfo.objects.select_related().get(user=user)
-#         except ExtraInfo.DoesNotExist:
-#             return Response({'message': 'ExtraInfo object not found for this user'}, status=status.HTTP_404_NOT_FOUND)
-
-#         if extrainfo.user_type == 'student':
-#             try:
-#                 student = Student.objects.select_related('id').get(id=extrainfo)
-#                 register = course_registration.objects.select_related().filter(student_id=student)
-#             except (Student.DoesNotExist, course_registration.DoesNotExist):
-#                 return Response({'message': 'No courses found for this student'}, status=status.HTTP_404_NOT_FOUND)
-
-#             courses = collections.OrderedDict()
-#             for reg in register:
-#                 # instructor = CourseInstructor.objects.select_related().get(course_id=reg.course_id).first()
-#                 instructors = CourseInstructor.objects.select_related().filter(course_id=reg.course_id)
-#                 instructor = instructors.first()  # Get the first instructor
-
-#                 courses[reg] = instructor
-
-#             courses_serializer = CoursesSerializer(courses, many=True)  # Assuming CourseRegistrationSerializer exists
-#             return Response(courses_serializer.data)
-#         elif extrainfo.user_type == 'faculty':
-#             # ... similar logic for faculty courses ...
-
-#             return Response(faculty_courses_serializer.data)  # Assuming faculty_courses_serializer exists
-#         elif extrainfo.user_type == 'id_admin':
-#             # ... similar logic for admin courses ...
-
-#             return Response(admin_courses_serializer.data)  # Assuming admin_courses_serializer exists
-#         else:
-#             return Response({'message': 'Invalid user type'}, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -862,3 +767,108 @@ def view_attendance(request, course_code, version):
         return Response(attendance_serializer.data, status=status.HTTP_200_OK)
 
     return Response({"error": "Invalid user type"}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def submit_marks(request):
+    """
+    API to submit/update student marks for evaluations.
+    - Only faculty users can access this API.
+    - Accepts student marks data in batch or individual format.
+    """
+    user = request.user
+
+    # Check if user is faculty
+    extrainfo = get_object_or_404(ExtraInfo, user=user)
+    if extrainfo.user_type != 'faculty':
+        return Response({"error": "Only faculty can submit marks"}, status=status.HTTP_403_FORBIDDEN)
+
+    # Extract request data
+    course_code = request.data.get("course_code")
+    version = request.data.get("version")
+    evaluation_type = request.data.get("evaluation_type")  # e.g., "midsem", "endsem", "assignment1"
+    marks_data = request.data.get("marks_data", [])  # List of student marks
+
+    if not course_code or not version or not evaluation_type or not marks_data:
+        return Response({"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validate course existence
+    try:
+        course = Courses.objects.get(code=course_code, version=version)
+    except Courses.DoesNotExist:
+        return Response({"error": f"Course {course_code} (version {version}) not found"}, 
+                       status=status.HTTP_404_NOT_FOUND)
+
+    # Check if faculty teaches this course
+    instructor = CourseInstructor.objects.filter(instructor_id=extrainfo, course_id=course).first()
+    if not instructor:
+        return Response({"error": "You are not an instructor for this course"}, 
+                       status=status.HTTP_403_FORBIDDEN)
+
+    # Process marks data
+    successful_updates = 0
+    errors = []
+
+    for entry in marks_data:
+        try:
+            # Get required fields
+            student_id = entry.get("student_id")
+            marks = entry.get("marks")
+            
+            if not student_id or marks is None:
+                errors.append(f"Missing student_id or marks in entry: {entry}")
+                continue
+
+            # Validate student exists and is registered for the course
+            try:
+                student_extrainfo = ExtraInfo.objects.get(id=student_id)
+                student = Student.objects.get(id=student_extrainfo)
+                
+                # Check if student is registered for this course
+                registration = course_registration.objects.filter(
+                    student_id=student, 
+                    course_id=course
+                ).exists()
+                
+                if not registration:
+                    errors.append(f"Student {student_id} is not registered for this course")
+                    continue
+                    
+            except (ExtraInfo.DoesNotExist, Student.DoesNotExist):
+                errors.append(f"Student with ID {student_id} not found")
+                continue
+
+            # Create or update marks in Student_grades model
+            defaults = {
+                "marks": marks,
+                "instructor_id": extrainfo
+            }
+            
+            # Optional comment field
+            if "comment" in entry:
+                defaults["comment"] = entry.get("comment")
+
+            # Update or create the marks entry
+            Student_grades.objects.update_or_create(
+                student_id=student,
+                course_id=course,
+                exam_type=evaluation_type,
+                defaults=defaults
+            )
+            
+            successful_updates += 1
+            
+        except Exception as e:
+            errors.append(f"Error processing entry for student {entry.get('student_id')}: {str(e)}")
+
+    # Return response with results
+    response_data = {
+        "message": f"Processed {successful_updates} mark entries successfully",
+        "successful_updates": successful_updates,
+        "error_count": len(errors)
+    }
+    
+    if errors:
+        response_data["errors"] = errors
+
+    return Response(response_data, status=status.HTTP_200_OK if successful_updates > 0 else status.HTTP_400_BAD_REQUEST)
