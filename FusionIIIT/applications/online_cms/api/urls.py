@@ -29,6 +29,6 @@ urlpatterns = [
     url(r'^slides/$', views.get_slides, name='get_slides'),
 
     url(r'^submit-marks/$', views.submit_marks, name='api_submit_marks'),
-    url(r'^send_notification/$', views.send_notification, name='send_notification'),
+    url(r'^send_notification/$', views.send_course_notification, name='send_notification'),
 
 ]
